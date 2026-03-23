@@ -248,7 +248,40 @@ def draw_allowed_only_graph(output_file="allowed_only_graph.png"):
 
     plt.title("Crawl-Allowed Subgraph (Fully Labeled)", fontsize=20, pad=20)
     plt.axis("off")
-    plt.legend(loc="upper right", fontsize=11, frameon=True)
+    import matplotlib.patches as mpatches
+
+    category_colors = {
+        "news": "#4C78A8",
+        "research/health": "#59A14F",
+        "technical": "#F28E2B",
+        "reference/education": "#B07AA1",
+        "general": "#9C755F",
+    }
+
+    legend_order = [
+        "news",
+        "research/health",
+        "technical",
+        "reference/education",
+        "general",
+    ]
+
+    legend_handles = [
+        mpatches.Patch(color=category_colors[name], label=name)
+        for name in legend_order
+    ]
+
+    plt.legend(
+        handles=legend_handles,
+        loc="upper left",
+        bbox_to_anchor=(1.02, 1),
+        fontsize=10,
+        frameon=True,
+        title="Page type",
+        title_fontsize=11,
+        labelspacing=0.6,
+        borderpad=0.8
+    )
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
     plt.show()
