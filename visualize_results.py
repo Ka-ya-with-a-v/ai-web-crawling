@@ -1,467 +1,264 @@
-from collections import Counter
+"""
+visualize.py – Plots for the web-crawl prioritization experiments.
+Now works with the 100-node graph and learned-weight ranking.
+"""
 
+from collections import Counter
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import networkx as nx
+import numpy as np
 import pandas as pd
 import seaborn as sns
 
 from web_graph_data import GRAPH, PAGERANK, ALLOWED, CONTENT_QUALITY
-from cloud import pagerank_only_top_k, select_top_k
+from cloud import (
+    pagerank_only_top_k,
+    select_top_k,
+    get_learned_weights,
+    FEATURE_NAMES,
+)
 
-
-# -----------------------------
-# Styling
-# -----------------------------
 sns.set_theme(style="whitegrid", context="talk")
 
-
-# -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
 # Helpers
-# -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+
 def classify_page(url: str) -> str:
     url = url.lower()
-
-    if any(x in url for x in ["login", "checkout", "cart", "account", "spam", "forumspam"]):
+    if any(x in url for x in ["login", "checkout", "cart", "account", "spam",
+                               "forumspam", "unsubscribe", "tracker", "cdn."]):
         return "low-quality/utility"
-    if any(x in url for x in ["nih.gov", "who.int", "cdc.gov", "nature.com", "arxiv.org", "sciencedirect.com", "science.org"]):
+    if any(x in url for x in ["nih.gov", "who.int", "cdc.gov", "nature.com", "arxiv.org",
+                               "science.org", "pubmed", "thelancet", "nejm", "medlineplus"]):
         return "research/health"
-    if any(x in url for x in ["bbc.com", "cnn.com", "reuters.com", "nytimes.com", "theguardian.com", "aljazeera.com", "wsj.com", "bloomberg.com"]):
-        return "news"
-    if any(x in url for x in ["github.com", "stackoverflow.com", "developer.mozilla.org", "kaggle.com"]):
-        return "technical"
-    if any(x in url for x in ["wikipedia.org", "stanford.edu", "mit.edu", "harvard.edu"]):
+    if any(x in url for x in ["bbc.com", "cnn.com", "reuters.com", "nytimes.com",
+                               "theguardian.com", "wsj.com", "bloomberg.com", "aljazeera",
+                               "vox.com", "theatlantic", "politico", "foreignpolicy",
+                               "techcrunch", "wired.com", "theverge"]):
+        return "news/media"
+    if any(x in url for x in ["github.com", "stackoverflow.com", "developer.mozilla.org",
+                               "kaggle.com", "docs.docker", "kubernetes.io",
+                               "tensorflow.org", "pytorch.org", "huggingface.co"]):
+        return "technical/AI"
+    if any(x in url for x in ["wikipedia.org", "stanford.edu", "mit.edu", "harvard.edu",
+                               "cambridge.org", "ox.ac.uk", "khanacademy", "coursera",
+                               "edx.org"]):
         return "reference/education"
+    if any(x in url for x in ["un.org", "worldbank", "imf.org", "oecd.org",
+                               "ecb.europa.eu", "europa.eu", "gov.uk", "nhs.uk",
+                               "data.gov"]):
+        return "government/policy"
+    return "general/blog"
 
-    return "general"
 
-
-def build_graph():
+def build_graph() -> nx.DiGraph:
     g = nx.DiGraph()
     for src, dsts in GRAPH.items():
-        if src not in g:
-            g.add_node(src)
+        g.add_node(src)
         for dst in dsts:
             g.add_edge(src, dst)
     return g
 
 
-def get_results(k=10):
+def get_results(k: int = 10):
     baseline = pagerank_only_top_k(GRAPH, PAGERANK, ALLOWED, k)
-    improved = select_top_k(GRAPH, PAGERANK, ALLOWED, CONTENT_QUALITY, k)
+    improved  = select_top_k(GRAPH, PAGERANK, ALLOWED, CONTENT_QUALITY, k)
     return baseline, improved
 
 
-def shorten_label(label: str, max_len: int = 30) -> str:
-    if len(label) <= max_len:
-        return label
-    return label[: max_len - 3] + "..."
+def shorten_label(label: str, max_len: int = 32) -> str:
+    return label if len(label) <= max_len else label[: max_len - 3] + "..."
 
 
-# -----------------------------
-# 1) Full graph with allowed pages highlighted
-# -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# Colour palette
+# ──────────────────────────────────────────────────────────────────────────────
+
+CATEGORY_COLORS = {
+    "news/media":           "#4C78A8",
+    "research/health":      "#59A14F",
+    "technical/AI":         "#F28E2B",
+    "reference/education":  "#B07AA1",
+    "government/policy":    "#76B7B2",
+    "general/blog":         "#9C755F",
+    "low-quality/utility":  "#E15759",
+    "blocked/not allowed":  "#BAB0AC",
+}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 1) Full graph – allowed pages highlighted
+# ──────────────────────────────────────────────────────────────────────────────
+
 def draw_allowed_highlight_graph(output_file="allowed_highlight_graph.png"):
     g = build_graph()
-
     pos = nx.spring_layout(g, seed=42, k=2.2, iterations=300)
+    plt.figure(figsize=(26, 18))
 
-    plt.figure(figsize=(22, 16))
+    nx.draw_networkx_edges(g, pos, edge_color="gray", alpha=0.15,
+                           arrows=True, arrowsize=6, width=0.6,
+                           connectionstyle="arc3,rad=0.05")
 
-    category_colors = {
-        "news": "#4C78A8",
-        "research/health": "#59A14F",
-        "technical": "#F28E2B",
-        "reference/education": "#B07AA1",
-        "general": "#9C755F",
-        "low-quality/utility": "#E15759",
-        "blocked/not allowed": "#BAB0AC",
-    }
+    blocked = [n for n in g.nodes if n not in ALLOWED]
+    nx.draw_networkx_nodes(g, pos, nodelist=blocked,
+                           node_color=CATEGORY_COLORS["blocked/not allowed"],
+                           node_size=[100 + PAGERANK.get(n, 0.05) * 400 for n in blocked],
+                           alpha=0.5, linewidths=0.6, edgecolors="black")
 
-    allowed_nodes = [n for n in g.nodes if n in ALLOWED]
-    blocked_nodes = [n for n in g.nodes if n not in ALLOWED]
-
-    # Lighter edges
-    nx.draw_networkx_edges(
-        g,
-        pos,
-        edge_color="gray",
-        alpha=0.18,
-        arrows=True,
-        arrowsize=8,
-        width=0.7,
-        connectionstyle="arc3,rad=0.05"
-    )
-
-    # Blocked nodes first
-    blocked_sizes = [120 + PAGERANK.get(n, 0.05) * 500 for n in blocked_nodes]
-    nx.draw_networkx_nodes(
-        g,
-        pos,
-        nodelist=blocked_nodes,
-        node_color=category_colors["blocked/not allowed"],
-        node_size=blocked_sizes,
-        alpha=0.55,
-        linewidths=0.8,
-        edgecolors="black",
-        label="blocked/not allowed"
-    )
-
-    # Allowed nodes grouped by category
-    category_to_nodes = {
-        "news": [],
-        "research/health": [],
-        "technical": [],
-        "reference/education": [],
-        "general": [],
-        "low-quality/utility": [],
-    }
-
-    for node in allowed_nodes:
-        category_to_nodes[classify_page(node)].append(node)
-
-    for category, nodes in category_to_nodes.items():
+    for cat, color in CATEGORY_COLORS.items():
+        if cat in ("blocked/not allowed",):
+            continue
+        nodes = [n for n in ALLOWED if classify_page(n) == cat and n in g.nodes]
         if not nodes:
             continue
+        nx.draw_networkx_nodes(g, pos, nodelist=nodes, node_color=color,
+                               node_size=[160 + PAGERANK.get(n, 0.05) * 700 for n in nodes],
+                               alpha=0.9, linewidths=0.8, edgecolors="black", label=cat)
 
-        sizes = [180 + PAGERANK.get(n, 0.05) * 900 for n in nodes]
-        nx.draw_networkx_nodes(
-            g,
-            pos,
-            nodelist=nodes,
-            node_color=category_colors[category],
-            node_size=sizes,
-            alpha=0.9,
-            linewidths=1.0,
-            edgecolors="black",
-            label=category
-        )
+    label_pos = {n: (x, y + 0.03) for n, (x, y) in pos.items()}
+    texts = nx.draw_networkx_labels(g, label_pos,
+                                    labels={n: n for n in g.nodes}, font_size=6)
+    for t in texts.values():
+        t.set_bbox(dict(facecolor="white", edgecolor="none", alpha=0.65, pad=0.12))
 
-    # Label every node, slightly offset upward
-    label_pos = {node: (x, y + 0.03) for node, (x, y) in pos.items()}
-    text_items = nx.draw_networkx_labels(
-        g,
-        label_pos,
-        labels={node: node for node in g.nodes},
-        font_size=7,
-        font_color="black"
-    )
-
-    for _, text in text_items.items():
-        text.set_bbox(dict(facecolor="white", edgecolor="none", alpha=0.7, pad=0.15))
-
-    plt.title("Simulated Web Graph with Crawl-Allowed Pages Highlighted", fontsize=20, pad=20)
+    legend_handles = [mpatches.Patch(color=c, label=l) for l, c in CATEGORY_COLORS.items()]
+    plt.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.01, 1),
+               fontsize=9, frameon=True, title="Page type")
+    plt.title("100-Node Simulated Web Graph  –  Crawl-Allowed Pages Highlighted", fontsize=18, pad=18)
     plt.axis("off")
-
-    legend_order = [
-        "blocked/not allowed",
-        "news",
-        "research/health",
-        "technical",
-        "reference/education",
-        "general",
-        "low-quality/utility",
-    ]
-
-    legend_handles = [
-        mpatches.Patch(color=category_colors[name], label=name)
-        for name in legend_order
-    ]
-
-    plt.legend(
-        handles=legend_handles,
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1),
-        borderaxespad=0,
-        fontsize=10,
-        frameon=True,
-        title="Page type"
-    )
-
-
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    plt.show()
+    plt.close()
+    print(f"Saved {output_file}")
 
 
-# -----------------------------
-# 2) Allowed-only graph, fully labeled
-# -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# 2) Allowed-only subgraph
+# ──────────────────────────────────────────────────────────────────────────────
+
 def draw_allowed_only_graph(output_file="allowed_only_graph.png"):
     g = build_graph()
-    allowed_subgraph = g.subgraph(ALLOWED).copy()
+    sub = g.subgraph(ALLOWED).copy()
+    pos = nx.spring_layout(sub, seed=42, k=2.0, iterations=300)
+    plt.figure(figsize=(24, 17))
 
-    pos = nx.spring_layout(allowed_subgraph, seed=42, k=2.0, iterations=300)
+    nx.draw_networkx_edges(sub, pos, edge_color="gray", alpha=0.18,
+                           arrows=True, arrowsize=7, width=0.65,
+                           connectionstyle="arc3,rad=0.05")
 
-    plt.figure(figsize=(22, 16))
-
-    category_colors = {
-        "news": "#4C78A8",
-        "research/health": "#59A14F",
-        "technical": "#F28E2B",
-        "reference/education": "#B07AA1",
-        "general": "#9C755F",
-        "low-quality/utility": "#E15759",
-    }
-
-    nx.draw_networkx_edges(
-        allowed_subgraph,
-        pos,
-        edge_color="gray",
-        alpha=0.20,
-        arrows=True,
-        arrowsize=8,
-        width=0.7,
-        connectionstyle="arc3,rad=0.05"
-    )
-
-    for category, color in category_colors.items():
-        nodes = [n for n in allowed_subgraph.nodes if classify_page(n) == category]
+    for cat, color in CATEGORY_COLORS.items():
+        if cat in ("blocked/not allowed",):
+            continue
+        nodes = [n for n in sub.nodes if classify_page(n) == cat]
         if not nodes:
             continue
+        nx.draw_networkx_nodes(sub, pos, nodelist=nodes, node_color=color,
+                               node_size=[160 + PAGERANK.get(n, 0.05) * 700 for n in nodes],
+                               alpha=0.9, linewidths=0.8, edgecolors="black", label=cat)
 
-        sizes = [180 + PAGERANK.get(n, 0.05) * 900 for n in nodes]
+    label_pos = {n: (x, y + 0.03) for n, (x, y) in pos.items()}
+    texts = nx.draw_networkx_labels(sub, label_pos,
+                                    labels={n: n for n in sub.nodes}, font_size=6)
+    for t in texts.values():
+        t.set_bbox(dict(facecolor="white", edgecolor="none", alpha=0.65, pad=0.12))
 
-        nx.draw_networkx_nodes(
-            allowed_subgraph,
-            pos,
-            nodelist=nodes,
-            node_color=color,
-            node_size=sizes,
-            alpha=0.9,
-            linewidths=1.0,
-            edgecolors="black",
-            label=category
-        )
-
-    label_pos = {node: (x, y + 0.03) for node, (x, y) in pos.items()}
-    text_items = nx.draw_networkx_labels(
-        allowed_subgraph,
-        label_pos,
-        labels={node: node for node in allowed_subgraph.nodes},
-        font_size=7,
-        font_color="black"
-    )
-
-    for _, text in text_items.items():
-        text.set_bbox(dict(facecolor="white", edgecolor="none", alpha=0.7, pad=0.15))
-
-    plt.title("Crawl-Allowed Subgraph (Fully Labeled)", fontsize=20, pad=20)
+    legend_handles = [mpatches.Patch(color=CATEGORY_COLORS[l], label=l)
+                      for l in list(CATEGORY_COLORS)[:-1]]
+    plt.legend(handles=legend_handles, loc="upper left", bbox_to_anchor=(1.01, 1),
+               fontsize=9, frameon=True, title="Page type")
+    plt.title("Crawl-Allowed Subgraph (100-Node Graph)", fontsize=18, pad=18)
     plt.axis("off")
-    import matplotlib.patches as mpatches
-
-    category_colors = {
-        "news": "#4C78A8",
-        "research/health": "#59A14F",
-        "technical": "#F28E2B",
-        "reference/education": "#B07AA1",
-        "general": "#9C755F",
-    }
-
-    legend_order = [
-        "news",
-        "research/health",
-        "technical",
-        "reference/education",
-        "general",
-    ]
-
-    legend_handles = [
-        mpatches.Patch(color=category_colors[name], label=name)
-        for name in legend_order
-    ]
-
-    plt.legend(
-        handles=legend_handles,
-        loc="upper left",
-        bbox_to_anchor=(1.02, 1),
-        fontsize=10,
-        frameon=True,
-        title="Page type",
-        title_fontsize=11,
-        labelspacing=0.6,
-        borderpad=0.8
-    )
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    plt.show()
+    plt.close()
+    print(f"Saved {output_file}")
 
 
-# -----------------------------
-# 3) Before/after rank movement chart
-# -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# 3) Rank-movement chart
+# ──────────────────────────────────────────────────────────────────────────────
+
 def plot_rank_movement(k=10, output_file="rank_movement_chart.png"):
     baseline, improved = get_results(k)
-
-    baseline_ranks = {item["url"]: rank for rank, item in enumerate(baseline, start=1)}
-    improved_ranks = {item["url"]: rank for rank, item in enumerate(improved, start=1)}
-
-    union_urls = list(dict.fromkeys([item["url"] for item in baseline] + [item["url"] for item in improved]))
-    rows = []
-
-    for url in union_urls:
-        rows.append({
-            "url": url,
-            "baseline_rank": baseline_ranks.get(url),
-            "improved_rank": improved_ranks.get(url),
-            "category": classify_page(url)
-        })
-
-    df = pd.DataFrame(rows)
+    b_ranks = {item["url"]: rank for rank, item in enumerate(baseline, 1)}
+    i_ranks = {item["url"]: rank for rank, item in enumerate(improved, 1)}
+    all_urls = list(dict.fromkeys([item["url"] for item in baseline] +
+                                  [item["url"] for item in improved]))
 
     plt.figure(figsize=(13, 8))
-
-    palette = {
-        "news": "#4C78A8",
-        "research/health": "#59A14F",
-        "technical": "#F28E2B",
-        "reference/education": "#B07AA1",
-        "general": "#9C755F",
-        "low-quality/utility": "#E15759",
-    }
-
-    for _, row in df.iterrows():
-        x_vals = []
-        y_vals = []
-
-        if pd.notna(row["baseline_rank"]):
-            x_vals.append(0)
-            y_vals.append(row["baseline_rank"])
-
-        if pd.notna(row["improved_rank"]):
-            x_vals.append(1)
-            y_vals.append(row["improved_rank"])
-
-        color = palette.get(row["category"], "#333333")
-
-        if len(x_vals) == 2:
-            plt.plot(x_vals, y_vals, marker="o", linewidth=2, alpha=0.9, color=color)
+    for url in all_urls:
+        color = CATEGORY_COLORS.get(classify_page(url), "#333333")
+        xs, ys = [], []
+        if url in b_ranks:
+            xs.append(0); ys.append(b_ranks[url])
+        if url in i_ranks:
+            xs.append(1); ys.append(i_ranks[url])
+        if len(xs) == 2:
+            plt.plot(xs, ys, marker="o", linewidth=2, alpha=0.85, color=color)
         else:
-            plt.scatter(x_vals, y_vals, s=90, alpha=0.9, color=color)
+            plt.scatter(xs, ys, s=80, alpha=0.85, color=color)
 
-        if pd.notna(row["improved_rank"]):
-            plt.text(1.03, row["improved_rank"], shorten_label(row["url"], 28), fontsize=9, va="center")
-        elif pd.notna(row["baseline_rank"]):
-            plt.text(0.03, row["baseline_rank"], shorten_label(row["url"], 28), fontsize=9, va="center")
+        label_x = 1.03 if url in i_ranks else 0.03
+        label_y = i_ranks.get(url, b_ranks.get(url))
+        plt.text(label_x, label_y, shorten_label(url, 28), fontsize=8.5, va="center")
 
-    plt.xticks([0, 1], ["PageRank Only", "Improved"])
+    plt.xticks([0, 1], ["PageRank Only", "Learned-Weight"])
     plt.yticks(range(1, k + 1))
     plt.gca().invert_yaxis()
     plt.ylabel("Rank Position")
-    plt.title("Before/After Rank Movement for Top-k Pages", fontsize=16)
+    plt.title("Rank Movement: PageRank-Only vs Learned-Weight Ranking", fontsize=15)
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    plt.show()
+    plt.close()
+    print(f"Saved {output_file}")
 
 
-# -----------------------------
-# 4) Pretty comparison table image
-# -----------------------------
-def save_pretty_table_image(k=10, output_file="ranking_table.png"):
-    baseline, improved = get_results(k)
+# ──────────────────────────────────────────────────────────────────────────────
+# 4) Top-k comparison bars
+# ──────────────────────────────────────────────────────────────────────────────
 
-    baseline_map = {rank: item["url"] for rank, item in enumerate(baseline, start=1)}
-    improved_map = {rank: item["url"] for rank, item in enumerate(improved, start=1)}
-
-    rows = []
-    for rank in range(1, k + 1):
-        b_url = baseline_map.get(rank, "-")
-        i_url = improved_map.get(rank, "-")
-        rows.append({
-            "Rank": rank,
-            "PageRank Only": b_url,
-            "Improved": i_url,
-            "Changed?": "Yes" if b_url != i_url else "No"
-        })
-
-    df = pd.DataFrame(rows)
-
-    fig_height = 1.2 + 0.55 * len(df)
-    fig, ax = plt.subplots(figsize=(16, fig_height))
-    ax.axis("off")
-
-    table = ax.table(
-        cellText=df.values,
-        colLabels=df.columns,
-        loc="center",
-        cellLoc="left",
-        colLoc="left"
-    )
-
-    table.auto_set_font_size(False)
-    table.set_fontsize(11)
-    table.scale(1, 1.6)
-
-    for col_idx in range(len(df.columns)):
-        cell = table[(0, col_idx)]
-        cell.set_text_props(weight="bold", color="black")
-        cell.set_facecolor("#D9EAF7")
-
-    changed_col_idx = list(df.columns).index("Changed?")
-    for row_idx in range(1, len(df) + 1):
-        changed = df.iloc[row_idx - 1]["Changed?"]
-        for col_idx in range(len(df.columns)):
-            cell = table[(row_idx, col_idx)]
-            if changed == "Yes":
-                cell.set_facecolor("#FCE8E6")
-            else:
-                cell.set_facecolor("#EEF5EA")
-
-    plt.title("Top-k Ranking Comparison Table", fontsize=18, pad=20)
-    plt.tight_layout()
-    plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    plt.show()
-
-
-# -----------------------------
-# 5) Top-k score comparison bars
-# -----------------------------
 def plot_topk_comparison(k=10, output_file="topk_comparison.png"):
     baseline, improved = get_results(k)
+    b_df = pd.DataFrame(baseline)[["url", "score"]].copy()
+    i_df = pd.DataFrame(improved)[["url", "score"]].copy()
+    b_df["label"] = b_df["url"].apply(lambda x: shorten_label(x, 32))
+    i_df["label"] = i_df["url"].apply(lambda x: shorten_label(x, 32))
 
-    baseline_df = pd.DataFrame(baseline)[["url", "score"]].copy()
-    improved_df = pd.DataFrame(improved)[["url", "score"]].copy()
-
-    baseline_df["label"] = baseline_df["url"].apply(lambda x: shorten_label(x, 30))
-    improved_df["label"] = improved_df["url"].apply(lambda x: shorten_label(x, 30))
-
-    fig, axes = plt.subplots(2, 1, figsize=(14, 10))
-
-    sns.barplot(data=baseline_df, x="score", y="label", ax=axes[0], color="#7DA9D8")
+    fig, axes = plt.subplots(2, 1, figsize=(14, 11))
+    sns.barplot(data=b_df, x="score", y="label", ax=axes[0], color="#7DA9D8")
     axes[0].set_title("Top-k Pages: PageRank Only")
-    axes[0].set_xlabel("Score")
-    axes[0].set_ylabel("")
+    axes[0].set_xlabel("Score"); axes[0].set_ylabel("")
 
-    sns.barplot(data=improved_df, x="score", y="label", ax=axes[1], color="#86BC86")
-    axes[1].set_title("Top-k Pages: Improved Ranking")
-    axes[1].set_xlabel("Score")
-    axes[1].set_ylabel("")
+    sns.barplot(data=i_df, x="score", y="label", ax=axes[1], color="#86BC86")
+    axes[1].set_title("Top-k Pages: Learned-Weight Ranking")
+    axes[1].set_xlabel("Score"); axes[1].set_ylabel("")
 
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    plt.show()
+    plt.close()
+    print(f"Saved {output_file}")
 
 
-# -----------------------------
-# 6) Category breakdown
-# -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# 5) Category breakdown
+# ──────────────────────────────────────────────────────────────────────────────
+
 def plot_category_breakdown(k=10, output_file="category_breakdown.png"):
     baseline, improved = get_results(k)
+    b_cats = [classify_page(item["url"]) for item in baseline]
+    i_cats = [classify_page(item["url"]) for item in improved]
 
-    baseline_categories = [classify_page(item["url"]) for item in baseline]
-    improved_categories = [classify_page(item["url"]) for item in improved]
-
-    baseline_counts = Counter(baseline_categories)
-    improved_counts = Counter(improved_categories)
-
-    all_categories = sorted(set(baseline_counts.keys()) | set(improved_counts.keys()))
-    baseline_values = [baseline_counts.get(cat, 0) for cat in all_categories]
-    improved_values = [improved_counts.get(cat, 0) for cat in all_categories]
+    all_cats = sorted(set(b_cats) | set(i_cats))
+    b_counts = Counter(b_cats)
+    i_counts = Counter(i_cats)
 
     plot_df = pd.DataFrame({
-        "category": all_categories * 2,
-        "count": baseline_values + improved_values,
-        "method": ["PageRank Only"] * len(all_categories) + ["Improved"] * len(all_categories)
+        "category": all_cats * 2,
+        "count":    [b_counts.get(c, 0) for c in all_cats] +
+                    [i_counts.get(c, 0) for c in all_cats],
+        "method":   ["PageRank Only"] * len(all_cats) + ["Learned-Weight"] * len(all_cats),
     })
 
     plt.figure(figsize=(13, 6))
@@ -469,63 +266,113 @@ def plot_category_breakdown(k=10, output_file="category_breakdown.png"):
     plt.xticks(rotation=20)
     plt.ylabel("Count in Top-k")
     plt.xlabel("")
-    plt.title("Category Breakdown of Selected Pages", fontsize=16)
+    plt.title("Category Distribution of Selected Top-k Pages", fontsize=15)
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    plt.show()
+    plt.close()
+    print(f"Saved {output_file}")
 
 
-# -----------------------------
-# 7) CSV export
-# -----------------------------
-def save_results_csv(k=10, output_file="ranking_results.csv"):
+# ──────────────────────────────────────────────────────────────────────────────
+# 6) NEW – Learned weight bar chart
+# ──────────────────────────────────────────────────────────────────────────────
+
+def plot_learned_weights(output_file="learned_weights.png"):
+    weights = get_learned_weights(GRAPH, PAGERANK, ALLOWED, CONTENT_QUALITY)
+    # exclude intercept for the bar chart
+    feat_weights = {k: v for k, v in weights.items() if k != "intercept"}
+    features = list(feat_weights.keys())
+    values   = list(feat_weights.values())
+    colors   = ["#59A14F" if v >= 0 else "#E15759" for v in values]
+
+    plt.figure(figsize=(11, 5))
+    bars = plt.barh(features, values, color=colors)
+    plt.axvline(0, color="black", linewidth=0.8)
+    for bar, val in zip(bars, values):
+        plt.text(val + (0.003 if val >= 0 else -0.003),
+                 bar.get_y() + bar.get_height() / 2,
+                 f"{val:+.4f}", va="center",
+                 ha="left" if val >= 0 else "right", fontsize=10)
+    plt.xlabel("Learned Coefficient")
+    plt.title("Feature Weights Learned by Ridge Regression", fontsize=15)
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Saved {output_file}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 7) Ranking table image
+# ──────────────────────────────────────────────────────────────────────────────
+
+def save_pretty_table_image(k=10, output_file="ranking_table.png"):
     baseline, improved = get_results(k)
+    b_map = {r: item["url"] for r, item in enumerate(baseline, 1)}
+    i_map = {r: item["url"] for r, item in enumerate(improved, 1)}
 
-    rows = []
-    for rank, item in enumerate(baseline, start=1):
-        rows.append({
-            "method": "PageRank Only",
-            "rank": rank,
-            "url": item["url"],
-            "domain": item["domain"],
-            "score": item["score"],
-            "category": classify_page(item["url"])
-        })
-
-    for rank, item in enumerate(improved, start=1):
-        rows.append({
-            "method": "Improved",
-            "rank": rank,
-            "url": item["url"],
-            "domain": item["domain"],
-            "score": item["score"],
-            "category": classify_page(item["url"])
-        })
+    rows = [{"Rank": r,
+             "PageRank Only":   b_map.get(r, "-"),
+             "Learned-Weight":  i_map.get(r, "-"),
+             "Changed?":        "Yes" if b_map.get(r) != i_map.get(r) else "No"}
+            for r in range(1, k + 1)]
 
     df = pd.DataFrame(rows)
-    df.to_csv(output_file, index=False)
-    print(f"Saved CSV: {output_file}")
+    fig, ax = plt.subplots(figsize=(17, 1.2 + 0.55 * len(df)))
+    ax.axis("off")
+    table = ax.table(cellText=df.values, colLabels=df.columns,
+                     loc="center", cellLoc="left", colLoc="left")
+    table.auto_set_font_size(False)
+    table.set_fontsize(11)
+    table.scale(1, 1.6)
+
+    changed_col = list(df.columns).index("Changed?")
+    for col in range(len(df.columns)):
+        table[(0, col)].set_text_props(weight="bold", color="black")
+        table[(0, col)].set_facecolor("#D9EAF7")
+    for row in range(1, len(df) + 1):
+        fill = "#FCE8E6" if df.iloc[row - 1]["Changed?"] == "Yes" else "#EEF5EA"
+        for col in range(len(df.columns)):
+            table[(row, col)].set_facecolor(fill)
+
+    plt.title("Top-k Ranking Comparison Table", fontsize=18, pad=20)
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"Saved {output_file}")
 
 
-# -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+# 8) CSV export
+# ──────────────────────────────────────────────────────────────────────────────
+
+def save_results_csv(k=10, output_file="ranking_results.csv"):
+    baseline, improved = get_results(k)
+    rows = []
+    for rank, item in enumerate(baseline, 1):
+        rows.append({"method": "PageRank Only", "rank": rank, "url": item["url"],
+                     "domain": item["domain"], "score": item["score"],
+                     "category": classify_page(item["url"])})
+    for rank, item in enumerate(improved, 1):
+        rows.append({"method": "Learned-Weight", "rank": rank, "url": item["url"],
+                     "domain": item["domain"], "score": item["score"],
+                     "category": classify_page(item["url"])})
+    pd.DataFrame(rows).to_csv(output_file, index=False)
+    print(f"Saved {output_file}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Run everything
-# -----------------------------
+# ──────────────────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     k = 10
+    draw_allowed_highlight_graph()
+    draw_allowed_only_graph()
+    plot_topk_comparison(k=k)
+    plot_rank_movement(k=k)
+    plot_category_breakdown(k=k)
+    plot_learned_weights()
+    save_pretty_table_image(k=k)
+    save_results_csv(k=k)
 
-    draw_allowed_highlight_graph(output_file="allowed_highlight_graph.png")
-    draw_allowed_only_graph(output_file="allowed_only_graph.png")
-    plot_topk_comparison(k=k, output_file="topk_comparison.png")
-    plot_rank_movement(k=k, output_file="rank_movement_chart.png")
-    plot_category_breakdown(k=k, output_file="category_breakdown.png")
-    save_pretty_table_image(k=k, output_file="ranking_table.png")
-    save_results_csv(k=k, output_file="ranking_results.csv")
-
-    print("\nGenerated files:")
-    print("- allowed_highlight_graph.png")
-    print("- allowed_only_graph.png")
-    print("- topk_comparison.png")
-    print("- rank_movement_chart.png")
-    print("- category_breakdown.png")
-    print("- ranking_table.png")
-    print("- ranking_results.csv")
+    print("\nAll files generated successfully.")
